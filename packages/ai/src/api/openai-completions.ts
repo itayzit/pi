@@ -39,6 +39,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { inlineSchemaReferences } from "../utils/inline-schema-references.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
@@ -848,7 +849,7 @@ function buildParams(
 	}
 
 	if (transcriptTools.requestTools.length > 0) {
-		params.tools = convertTools(transcriptTools.requestTools, compat);
+		params.tools = convertTools(transcriptTools.requestTools, compat, model);
 		if (compat.zaiToolStream) {
 			(params as any).tool_stream = true;
 		}
@@ -1242,7 +1243,7 @@ export function convertMessages(
 			if (addedTools.length > 0) {
 				const kimiToolMessage: KimiToolSystemMessageParam = {
 					role: "system",
-					tools: convertTools(addedTools, compat),
+					tools: convertTools(addedTools, compat, model),
 				};
 				params.push(kimiToolMessage as unknown as ChatCompletionMessageParam);
 			}
@@ -1474,6 +1475,7 @@ export function convertMessages(
 function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompletionsCompat,
+	model: Model<"openai-completions">,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
 	return tools.map((tool) => {
 		const grammar = resolveGrammarConstrainedSampling(tool, compat.supportsOpenAIGrammarTools);
@@ -1495,12 +1497,14 @@ function convertTools(
 		}
 
 		const strict = resolveJsonSchemaStrictSampling(tool, compat.supportsStrictMode !== false);
+		const parameters = getJsonSchemaToolParameters(tool, strict) as Record<string, unknown>;
 		return {
 			type: "function",
 			function: {
 				name: tool.name,
 				description: tool.description,
-				parameters: getJsonSchemaToolParameters(tool, strict) as Record<string, unknown>,
+				// These model families can stringify objects described only through a reference.
+				parameters: /nemotron|qwen/i.test(model.id) ? inlineSchemaReferences(parameters) : parameters,
 				// Only include strict if provider supports it. Some reject unknown fields.
 				...(compat.supportsStrictMode !== false && { strict: strict ?? false }),
 			},
